@@ -1,4 +1,4 @@
-USE bookstore;
+USE epicbook;
 
 -- Insert Books into Book Table
 INSERT INTO Author(firstName,lastName,createdAt,updatedAt) 
