@@ -1,5 +1,5 @@
 -- Use JAWS_DB
-USE bookstore;
+USE epicbook;
 
 /**
 on your local machine, use the following:
