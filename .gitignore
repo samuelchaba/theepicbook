@@ -1,2 +1,10 @@
+# Ansible / SSH
+*.pem
+*.key
+ansible/inventory.ini
+ansible/group_vars/*/vault.yml
+*.retry
+
+
 node_modules
 .DS_Store
