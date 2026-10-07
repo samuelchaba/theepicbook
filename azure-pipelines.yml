@@ -1,19 +1,467 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
-
 trigger:
-- main
+  branches:
+    include:
+    - main
+  paths:
+    include:
+    - ansible/**
+    - db/**
+    - config/**
+    - models/**
+    - routes/**
+    - views/**
+    - public/**
+    - server.js
+    - package.json
+    - package-lock.json
+    - azure-pipelines.yml
+
+pr:
+  branches:
+    include:
+    - main
+  paths:
+    include:
+    - ansible/**
+    - db/**
+    - config/**
+    - models/**
+    - routes/**
+    - views/**
+    - public/**
+    - server.js
+    - package.json
+    - package-lock.json
+    - azure-pipelines.yml
 
 pool:
-  vmImage: ubuntu-latest
+  name: ubuntu-pool
 
-steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
+variables:
+- group: Epicbook-mysql-secrets
 
-- script: |
-    echo Add other tasks to build, test, and deploy your project.
-    echo See https://aka.ms/yaml
-  displayName: 'Run a multi-line script'
+- name: ANSIBLE_DIR
+  value: ansible
+
+- name: INVENTORY
+  value: ansible/inventory/hosts.ini
+
+- name: PLAYBOOK
+  value: ansible/site.yml
+
+- name: ANSIBLE_USER
+  value: ubuntu
+
+stages:
+
+# ============================================================
+# STAGE 1 - PREPARE
+# ============================================================
+
+- stage: Prepare
+  displayName: "Stage 1 - Prepare"
+  jobs:
+
+  - job: PrepareAnsible
+    displayName: "Prepare Ansible environment"
+
+    steps:
+
+    - checkout: self
+      displayName: "Checkout Application Repository"
+
+    - bash: |
+        set -e
+
+        echo "Python version:"
+        python3 --version
+
+        echo "Creating temporary Python virtual environment..."
+
+        python3 -m venv "$(Agent.TempDirectory)/ansible-venv"
+
+        source "$(Agent.TempDirectory)/ansible-venv/bin/activate"
+
+        python -m pip install --upgrade pip
+        python -m pip install ansible
+
+        echo "Ansible version:"
+        ansible --version
+
+        echo "##vso[task.prependpath]$(Agent.TempDirectory)/ansible-venv/bin"
+      displayName: "Install and verify Python and Ansible"
+
+    - bash: |
+        set -e
+
+        source "$(Agent.TempDirectory)/ansible-venv/bin/activate"
+
+        echo "Installing required Ansible collection..."
+
+        ansible-galaxy collection install community.mysql
+
+        echo "Installed collections:"
+        ansible-galaxy collection list
+      displayName: "Install required Ansible collection"
+
+    - task: DownloadSecureFile@1
+      name: downloadSSHKey
+      displayName: "Download SSH private key securely"
+      inputs:
+        secureFile: "agent.pem"
+
+    - bash: |
+        set -e
+
+        chmod 600 "$(downloadSSHKey.secureFilePath)"
+
+        echo "SSH private key downloaded to temporary secure location."
+        echo "Permissions:"
+        stat -c "%a" "$(downloadSSHKey.secureFilePath)"
+
+      displayName: "Secure SSH private key"
+
+# ============================================================
+# STAGE 2 - VALIDATE
+# ============================================================
+
+- stage: Validate
+  displayName: "Stage 2 - Validate"
+  dependsOn: Prepare
+  condition: succeeded()
+
+  jobs:
+
+  - job: ValidateAnsible
+    displayName: "Validate inventory, playbook and connectivity"
+
+    steps:
+
+    - checkout: self
+      displayName: "Checkout Application Repository"
+
+    - bash: |
+        set -e
+
+        python3 -m venv "$(Agent.TempDirectory)/ansible-venv"
+        source "$(Agent.TempDirectory)/ansible-venv/bin/activate"
+
+        python -m pip install --upgrade pip
+        python -m pip install ansible
+
+        ansible --version
+
+        echo "##vso[task.prependpath]$(Agent.TempDirectory)/ansible-venv/bin"
+      displayName: "Prepare Ansible"
+
+    - bash: |
+        set -e
+
+        source "$(Agent.TempDirectory)/ansible-venv/bin/activate"
+
+        ansible-galaxy collection install community.mysql
+
+      displayName: "Install required collection"
+
+    - task: DownloadSecureFile@1
+      name: validationSSHKey
+      displayName: "Download SSH private key"
+      inputs:
+        secureFile: "agent.pem"
+
+    - bash: |
+        set -e
+
+        chmod 600 "$(validationSSHKey.secureFilePath)"
+
+        echo "Checking Ansible inventory..."
+
+        ansible-inventory \
+          -i "$(INVENTORY)" \
+          --graph
+
+      displayName: "Validate inventory"
+
+    - bash: |
+        set -e
+
+        source "$(Agent.TempDirectory)/ansible-venv/bin/activate"
+
+        echo "Running Ansible syntax check..."
+
+        ansible-playbook \
+          -i "$(INVENTORY)" \
+          "$(PLAYBOOK)" \
+          --syntax-check \
+          --private-key "$(validationSSHKey.secureFilePath)" \
+          -u "$(ANSIBLE_USER)"
+
+      displayName: "Ansible syntax check"
+
+    - bash: |
+        set -e
+
+        if [ -z "$DB_USERNAME" ]; then
+          echo "ERROR: Database username variable is not available."
+          exit 1
+        fi
+
+        if [ -z "$DB_PASSWORD" ]; then
+          echo "ERROR: Database password variable is not available."
+          exit 1
+        fi
+
+        echo "Required database variables are available."
+        echo "Database username: available"
+        echo "Database password: available"
+
+      displayName: "Validate required secret variables"
+      env:
+        DB_USERNAME: $(mysqlAdminUsername)
+        DB_PASSWORD: $(mysqlAdminPassword)
+
+    - bash: |
+        set -e
+
+        source "$(Agent.TempDirectory)/ansible-venv/bin/activate"
+
+        chmod 600 "$(validationSSHKey.secureFilePath)"
+
+        echo "Testing SSH connectivity to frontend..."
+
+        ansible frontend \
+          -i "$(INVENTORY)" \
+          -m ansible.builtin.ping \
+          --private-key "$(validationSSHKey.secureFilePath)" \
+          -u "$(ANSIBLE_USER)" \
+          --ssh-extra-args="-o StrictHostKeyChecking=no"
+
+        echo "Testing SSH connectivity to backend..."
+
+        ansible backend \
+          -i "$(INVENTORY)" \
+          -m ansible.builtin.ping \
+          --private-key "$(validationSSHKey.secureFilePath)" \
+          -u "$(ANSIBLE_USER)" \
+          --ssh-extra-args="-o StrictHostKeyChecking=no"
+
+        echo "Frontend and backend connectivity successful."
+
+      displayName: "Test Ansible connectivity"
+
+# ============================================================
+# STAGE 3 - CONFIGURE AND DEPLOY
+# ============================================================
+
+- stage: ConfigureAndDeploy
+  displayName: "Stage 3 - Configure and Deploy"
+  dependsOn: Validate
+  condition: succeeded()
+
+  jobs:
+
+  - job: DeployEpicBook
+    displayName: "Configure infrastructure and deploy EpicBook"
+
+    steps:
+
+    - checkout: self
+      displayName: "Checkout Application Repository"
+
+    - bash: |
+        set -e
+
+        python3 -m venv "$(Agent.TempDirectory)/ansible-venv"
+
+        source "$(Agent.TempDirectory)/ansible-venv/bin/activate"
+
+        python -m pip install --upgrade pip
+        python -m pip install ansible
+
+        echo "##vso[task.prependpath]$(Agent.TempDirectory)/ansible-venv/bin"
+
+      displayName: "Prepare Ansible"
+
+    - bash: |
+        set -e
+
+        source "$(Agent.TempDirectory)/ansible-venv/bin/activate"
+
+        ansible-galaxy collection install community.mysql
+
+      displayName: "Install required Ansible collection"
+
+    - task: DownloadSecureFile@1
+      name: deploySSHKey
+      displayName: "Download SSH private key"
+      inputs:
+        secureFile: "agent.pem"
+
+    - bash: |
+        set -e
+
+        chmod 600 "$(deploySSHKey.secureFilePath)"
+
+        echo "Creating temporary Ansible secret variables file..."
+
+        python3 <<'PY'
+        import json
+        import os
+
+        secrets = {
+            "db_admin_username": os.environ["EPICBOOK_DB_USERNAME"],
+            "db_admin_password": os.environ["EPICBOOK_DB_PASSWORD"]
+        }
+
+        path = os.path.join(
+            os.environ["AGENT_TEMPDIRECTORY"],
+            "epicbook-secrets.json"
+        )
+
+        with open(path, "w") as f:
+            json.dump(secrets, f)
+
+        os.chmod(path, 0o600)
+        PY
+
+        echo "Temporary secret file created."
+
+      displayName: "Prepare protected database variables"
+      env:
+        EPICBOOK_DB_USERNAME: $(mysqlAdminUsername)
+        EPICBOOK_DB_PASSWORD: $(mysqlAdminPassword)
+        AGENT_TEMPDIRECTORY: $(Agent.TempDirectory)
+
+    - bash: |
+        set -e
+
+        source "$(Agent.TempDirectory)/ansible-venv/bin/activate"
+
+        echo "Starting EpicBook Ansible deployment..."
+
+        ansible-playbook \
+          -i "$(INVENTORY)" \
+          "$(PLAYBOOK)" \
+          --private-key "$(deploySSHKey.secureFilePath)" \
+          -u "$(ANSIBLE_USER)" \
+          --ssh-extra-args="-o StrictHostKeyChecking=no" \
+          --extra-vars "@$(Agent.TempDirectory)/epicbook-secrets.json"
+
+      displayName: "Run EpicBook Ansible deployment"
+
+    - bash: |
+        set -e
+
+        SECRET_FILE="$(Agent.TempDirectory)/epicbook-secrets.json"
+
+        if [ -f "$SECRET_FILE" ]; then
+          rm -f "$SECRET_FILE"
+        fi
+
+        echo "Temporary secret file removed."
+
+      displayName: "Remove temporary database secrets"
+      condition: always()
+
+    - bash: |
+        set -e
+
+        if [ -f "$(deploySSHKey.secureFilePath)" ]; then
+          rm -f "$(deploySSHKey.secureFilePath)"
+        fi
+
+        echo "Temporary SSH private key removed."
+
+      displayName: "Remove temporary SSH key"
+      condition: always()
+
+# ============================================================
+# STAGE 4 - VERIFY
+# ============================================================
+
+- stage: Verify
+  displayName: "Stage 4 - Verify"
+  dependsOn: ConfigureAndDeploy
+  condition: succeeded()
+
+  jobs:
+
+  - job: VerifyDeployment
+    displayName: "Verify EpicBook deployment"
+
+    steps:
+
+    - checkout: self
+      displayName: "Checkout Application Repository"
+
+    - bash: |
+        set -e
+
+        python3 -m venv "$(Agent.TempDirectory)/ansible-venv"
+
+        source "$(Agent.TempDirectory)/ansible-venv/bin/activate"
+
+        python -m pip install --upgrade pip
+        python -m pip install ansible
+
+        ansible-galaxy collection install community.mysql
+
+        echo "##vso[task.prependpath]$(Agent.TempDirectory)/ansible-venv/bin"
+
+      displayName: "Prepare verification environment"
+
+    - task: DownloadSecureFile@1
+      name: verificationSSHKey
+      displayName: "Download SSH private key"
+      inputs:
+        secureFile: "agent.pem"
+
+    - bash: |
+        set -e
+
+        chmod 600 "$(verificationSSHKey.secureFilePath)"
+
+        source "$(Agent.TempDirectory)/ansible-venv/bin/activate"
+
+        echo "Running final Ansible verification..."
+
+        ansible-playbook \
+          -i "$(INVENTORY)" \
+          "$(PLAYBOOK)" \
+          --private-key "$(verificationSSHKey.secureFilePath)" \
+          -u "$(ANSIBLE_USER)" \
+          --ssh-extra-args="-o StrictHostKeyChecking=no" \
+          --extra-vars "db_admin_username=$(mysqlAdminUsername)" \
+          --extra-vars "db_admin_password=$(mysqlAdminPassword)"
+
+      displayName: "Verify backend, database and Nginx"
+
+    - bash: |
+        set -e
+
+        echo "Checking frontend HTTP endpoint..."
+
+        curl \
+          --fail \
+          --silent \
+          --show-error \
+          --location \
+          --max-time 15 \
+          "http://65.2.132.90/"
+
+        echo
+        echo "Frontend HTTP endpoint is responding successfully."
+
+      displayName: "Verify public frontend HTTP"
+
+    - bash: |
+        set -e
+
+        if [ -f "$(verificationSSHKey.secureFilePath)" ]; then
+          rm -f "$(verificationSSHKey.secureFilePath)"
+        fi
+
+        echo "Temporary SSH key removed."
+
+      displayName: "Cleanup Secure File"
+      condition: always()
