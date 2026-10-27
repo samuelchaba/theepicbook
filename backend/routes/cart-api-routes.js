@@ -28,6 +28,19 @@ module.exports = function (app) {
       book: book
     });
   });
+  
+  app.get("/api/books", async function (req, res) {
+  try {
+    const books = await db.Book.findAll({
+      include: [db.Author],
+    });
+    res.json(books);
+    } 
+  catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch books" });
+    }
+  });  
 
   app.delete("/api/cart/delete", async () => {
     await db.Cart.destroy({ where: {}, truncate: false });

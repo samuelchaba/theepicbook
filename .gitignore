@@ -8,3 +8,6 @@ ansible/group_vars/*/vault.yml
 
 node_modules
 .DS_Store
+.env
+logs/
+backups/

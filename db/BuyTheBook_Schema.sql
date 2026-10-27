@@ -3,7 +3,7 @@ On your local machine, replace 'bookstore' with 'bookstore_db'
 **/
 
 -- Use JAWS_DB Database
-USE epicbook;
+USE bookstore;
 
 -- Create Table Author on DB
 -- CREATE TABLE `bookstore`.`Author` (
@@ -13,7 +13,7 @@ USE epicbook;
 --   PRIMARY KEY (`id`));
 
 -- Create Table Author on DB
-CREATE TABLE `epicbook`.`Author` (
+CREATE TABLE `bookstore`.`Author` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `firstName` VARCHAR(45) NOT NULL,
   `lastName` VARCHAR(45) NOT NULL,
@@ -22,7 +22,7 @@ CREATE TABLE `epicbook`.`Author` (
   PRIMARY KEY (`id`));
 
 -- Create Table Book after Author because of FK constraint to Author Tbl
-CREATE TABLE `epicbook`.`Book` (
+CREATE TABLE `bookstore`.`Book` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `title` VARCHAR(255) NOT NULL,
   `genre` VARCHAR(255) NOT NULL,
@@ -44,7 +44,7 @@ CREATE TABLE `epicbook`.`Book` (
 
 
 -- Create Table Cart
-CREATE TABLE `epicbook`.`Cart` (
+CREATE TABLE `bookstore`.`Cart` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `quantity` INT NOT NULL,
   `price` DECIMAL(13,2) NOT NULL,
